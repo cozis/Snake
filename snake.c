@@ -18,6 +18,12 @@ struct Snake {
   Direction dir;
   DirectionQueue body;
   _Bool grow;
+
+  struct {
+    _Bool        cached;
+    unsigned int body_part_idx;
+    Position     body_part_pos;
+  } cache;
 };
 
 static Snake snake_pool[MAX_SNAKES];
@@ -105,14 +111,31 @@ void Snake_changeDirection(Snake *snake, Direction new_dir)
     snake->dir = new_dir;
 }
 
-void Snake_step(Snake *snake)
+unsigned int Snake_size(Snake *snake)
 {
+  return 1 + DirectionQueue_size(&snake->body);
+}
+
+SnakeEvent Snake_step(Snake *snake)
+{
+  // Would the snake bite it's tail
+  // by going forward?
+  Position next_pos = evaluateNextPosition(snake->head, snake->dir);
+  if (Snake_occupiesPosition(snake, next_pos))
+    return SEV_BITE;
+
+  // Make the snake go forward
   DirectionQueue_push(&snake->body, oppositeDirection(snake->dir));
-  snake->head = evaluateNextPosition(snake->head, snake->dir);
+  snake->head = next_pos;
   if (!snake->grow)
     DirectionQueue_pop(&snake->body);
   else
     snake->grow = 0;
+
+  /* Invalidate the cache */
+  snake->cache.cached = 0;
+
+  return SEV_NONE;
 }
 
 void Snake_grow(Snake *snake)
@@ -120,33 +143,43 @@ void Snake_grow(Snake *snake)
   snake->grow = 1;
 }
 
-/*
-const char *directionName(Direction dir)
-{
-  switch (dir) {
-    case DIR_UP:    return "DIR_UP";
-    case DIR_DOWN:  return "DIR_DOWN";
-    case DIR_LEFT:  return "DIR_LEFT";
-    case DIR_RIGHT: return "DIR_RIGHT";
-  }
-  /* UNREACHABLE */
-  return 0;
-}
-*/
-
 _Bool Snake_getBodyPosition(Snake *snake, unsigned int n, Position *pos)
 {
   if (n > DirectionQueue_size(&snake->body))
     return 0;
 
-  Position p = snake->head;
-  for (unsigned int i = 0; i < n; ++i) {
+  Position p;
+  unsigned int i;
+
+  if (snake->cache.cached && snake->cache.body_part_idx <= n) {
+    i = snake->cache.body_part_idx;
+    p = snake->cache.body_part_pos;
+  } else {
+    i = 0;
+    p = snake->head;
+  }
+  
+  while (i < n) {
     Direction dir = DirectionQueue_top(&snake->body, i);
     p = evaluateNextPosition(p, dir);
+    i++;
   }
+
+  snake->cache.cached = 1;
+  snake->cache.body_part_idx = n;
+  snake->cache.body_part_pos = p;
 
   if (pos)
     *pos = p;
 
   return 1;
+}
+
+_Bool Snake_occupiesPosition(Snake *snake, Position pos)
+{
+  Position pos2;
+  for (unsigned int i = 0; Snake_getBodyPosition(snake, i, &pos2); ++i)
+    if (pos2.x == pos.x && pos2.y == pos.y)
+      return 1;
+  return 0;
 }

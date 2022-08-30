@@ -6,6 +6,10 @@
 typedef struct {
   unsigned int fps;
   Snake *snake;
+  _Bool lost;
+
+  _Bool    apple_spawned;
+  Position apple_pos;
 } Game;
 
 typedef enum {
@@ -27,6 +31,25 @@ static Direction buttonToDirection(Button button)
   return DIR_UP; // To shut up the warning.
 }
 
+static Position randomPosition()
+{
+  return POSITION(rand(), rand());
+}
+
+static void Game_spawnApple(Game *game)
+{
+  if (game->apple_spawned)
+    return; // Can't have multiple apples at once.
+
+  Position pos;
+  do 
+    pos = randomPosition();
+  while (Snake_occupiesPosition(game->snake, pos));
+
+  game->apple_spawned = 1;
+  game->apple_pos = pos;
+}
+
 static void Game_pressButton(Game *game, Button button)
 {
   Snake_changeDirection(game->snake, buttonToDirection(button));
@@ -43,6 +66,9 @@ const char *Game_init(Game *game,
 
   game->snake = snake;
   game->fps = fps;
+  game->lost = 0;
+  game->apple_spawned = 0;
+  Game_spawnApple(game);
   return NULL;
 }
 
@@ -59,8 +85,106 @@ void drawPixel(SDL_Renderer *ren, int x, int y)
   rect.h = tile_h;
   rect.x = x * tile_w;
   rect.y = y * tile_h;
-  SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
   SDL_RenderFillRect(ren, &rect);
+}
+
+typedef enum {
+  GEV_WIN,
+  GEV_LOSE,
+  GEV_NONE,
+} GameEvent;
+
+GameEvent Game_step(Game *game)
+{
+  switch(Snake_step(game->snake)) {
+    case SEV_BITE: return GEV_LOSE;
+    case SEV_NONE: /* OK */ break;
+  }
+
+  if (game->apple_spawned && Snake_occupiesPosition(game->snake, game->apple_pos)) {
+
+    if (Snake_size(game->snake) == DISPLAY_WIDTH * DISPLAY_HEIGHT)
+      return GEV_WIN;
+
+    Snake_grow(game->snake);
+    game->apple_spawned = 0;
+    Game_spawnApple(game);
+  }
+
+  return GEV_NONE;
+}
+
+static void drawSnake(Game *game, SDL_Renderer *ren)
+{
+  SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+
+  Position pos;
+  for (int i = 0; Snake_getBodyPosition(game->snake, i, &pos); ++i)
+    drawPixel(ren, pos.x, pos.y);
+}
+
+static void drawApple(Game *game, SDL_Renderer *ren)
+{
+  if (game->apple_spawned) {
+    SDL_SetRenderDrawColor(ren, 255, 0, 0, 255);
+    drawPixel(ren, game->apple_pos.x, 
+                   game->apple_pos.y);
+  }
+}
+
+static void drawGame(Game *game, SDL_Renderer *ren)
+{
+  SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+  SDL_RenderClear(ren);
+
+  drawSnake(game, ren);
+  drawApple(game, ren);
+
+  SDL_RenderPresent(ren);
+}
+
+static _Bool handleEvents(Game *game)
+{
+  SDL_Event event;
+  while (SDL_PollEvent(&event)) {
+    switch (event.type) {
+      
+      case SDL_QUIT: 
+      return 0;
+      
+      case SDL_KEYDOWN:
+      {
+        switch (event.key.keysym.sym) {
+          case SDLK_UP:    Game_pressButton(game, BUTTON_UP);    break;
+          case SDLK_DOWN:  Game_pressButton(game, BUTTON_DOWN);  break;
+          case SDLK_LEFT:  Game_pressButton(game, BUTTON_LEFT);  break;
+          case SDLK_RIGHT: Game_pressButton(game, BUTTON_RIGHT); break;        
+        }
+        break;
+      }
+    }
+  }
+  return 1;
+}
+
+typedef enum {
+  GRES_WIN,
+  GRES_LOSE,
+  GRES_BORED,
+} GameResult;
+
+GameResult Game_play(Game *game, SDL_Renderer *ren)
+{
+  while (handleEvents(game)) {
+    switch (Game_step(game)) {
+      case GEV_WIN:  return GRES_WIN;
+      case GEV_LOSE: return GRES_LOSE;
+      case GEV_NONE: /* OK */ break;
+    }
+    drawGame(game, ren);
+    SDL_Delay(1000 / game->fps);
+  }
+  return GRES_BORED;
 }
 
 int main(void) 
@@ -87,7 +211,7 @@ int main(void)
     return -1;
   }
 
-  unsigned int fps = 10;
+  unsigned int fps = 30;
   unsigned int snake_x = 30;
   unsigned int snake_y = 30;
 
@@ -99,50 +223,14 @@ int main(void)
     return -1;
   }
 
-  for (int i = 0; i < 8; ++i) {
-    Snake_grow(game.snake);
-    Snake_step(game.snake);
+  switch (Game_play(&game, ren)) {
+    case GRES_WIN:  fprintf(stderr, "You win!\n"); break;
+    case GRES_LOSE: fprintf(stderr, "You lose!\n"); break;
+    case GRES_BORED:break;
   }
 
-  _Bool running = 1;
-
-  while (running) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      switch (event.type) {
-
-        case SDL_QUIT: running = 0; break;
-
-        case SDL_KEYDOWN:
-        {
-          switch (event.key.keysym.sym) {
-            case SDLK_UP:    Game_pressButton(&game, BUTTON_UP);    break;
-            case SDLK_DOWN:  Game_pressButton(&game, BUTTON_DOWN);  break;
-            case SDLK_LEFT:  Game_pressButton(&game, BUTTON_LEFT);  break;
-            case SDLK_RIGHT: Game_pressButton(&game, BUTTON_RIGHT); break;
-            case SDLK_SPACE: Snake_grow(game.snake); break;
-          }
-          break;
-        }
-      }
-    }
-
-    Snake_step(game.snake);
-
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-    SDL_RenderClear(ren);
-
-    /* Render the snake */
-    Position pos;
-    for (int i = 0; Snake_getBodyPosition(game.snake, i, &pos); ++i) {
-      printf("(x=%d, y=%d)\n", pos.x, pos.y);
-      drawPixel(ren, pos.x, pos.y);
-    }
-
-    /* Update */
-    SDL_RenderPresent(ren);
-    SDL_Delay(1000 / game.fps);
-  }
-
+  SDL_DestroyRenderer(ren);
+  SDL_DestroyWindow(win);
   SDL_Quit();
+  return 0;
 }
